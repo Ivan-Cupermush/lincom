@@ -68,6 +68,11 @@ fn update_link(
 }
 
 #[tauri::command]
+fn toggle_favorite(state: State<AppState>, id: i64) -> CmdResult<bool> {
+    state.0.lock().map_err(err)?.toggle_favorite(id).map_err(err)
+}
+
+#[tauri::command]
 fn delete_folder(state: State<AppState>, id: i64) -> CmdResult<()> {
     state.0.lock().map_err(err)?.delete_folder(id).map_err(err)
 }
@@ -94,6 +99,7 @@ pub fn run() {
             create_link,
             update_folder,
             update_link,
+            toggle_favorite,
             delete_folder,
             delete_link
         ])

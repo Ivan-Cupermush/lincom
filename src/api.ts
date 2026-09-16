@@ -22,6 +22,8 @@ export const api = {
     url: string,
     description: string,
   ): Promise<void> => invoke<void>("update_link", { id, title, url, description }),
+  toggleFavorite: (id: number): Promise<boolean> =>
+    invoke<boolean>("toggle_favorite", { id }),
   deleteFolder: (id: number): Promise<void> => invoke<void>("delete_folder", { id }),
   deleteLink: (id: number): Promise<void> => invoke<void>("delete_link", { id }),
 };

@@ -1,6 +1,5 @@
 /* lincom — палитры Solarized Light (default) и Solarized Dark. */
 :root, [data-theme="light"] {
-  --line-h: 20px;
   --font-size: 14px;
   --bg: rgba(253, 246, 227, 0.90);
   --text: #586e75;
@@ -10,6 +9,7 @@
   --hdr: #b58900;
   --link: #859900;
   --url: #657b83;
+  --mtime: #93a1a1;
   --folder: #dc322f;
   --active-bg: #859900;
   --active-fg: #fdf6e3;
@@ -19,9 +19,11 @@
   --warn: #dc322f;
   --titlebar-bg: rgba(238, 232, 213, 0.95);
   --titlebar-fg: #b58900;
+  --sep: #2aa198;
 }
 
 [data-theme="dark"] {
+  --font-size: 14px;
   --bg: rgba(0, 43, 54, 0.90);
   --text: #839496;
   --dim: #586e75;
@@ -30,6 +32,7 @@
   --hdr: #b58900;
   --link: #859900;
   --url: #839496;
+  --mtime: #93a1a1;
   --folder: #dc322f;
   --active-bg: #2aa198;
   --active-fg: #002b36;
@@ -39,6 +42,7 @@
   --warn: #dc322f;
   --titlebar-bg: rgba(7, 54, 66, 0.95);
   --titlebar-fg: #b58900;
+  --sep: #2aa198;
 }
 
 * { box-sizing: border-box; }
@@ -66,15 +70,21 @@ html, body {
 
 #screen { height: calc(100% - 30px); display: flex; flex-direction: column; background: var(--bg); }
 #panels { flex: 1; display: flex; overflow: hidden; padding-top: 4px; }
-#left { margin: 0; line-height: var(--line-h); white-space: pre; overflow: hidden; }
-#right { overflow: hidden; }
 
-.fwin { margin-bottom: 4px; }
-.f-line { line-height: var(--line-h); white-space: pre; }
-.f-mid { display: flex; justify-content: space-between; align-items: center; height: 30px; }
-.f-name { font-size: 1.25em; font-weight: 700; color: var(--folder); padding: 0 10px; white-space: pre; }
-.fwin-active .f-name { background: var(--active-bg); color: var(--active-fg); }
-.fwin-active .f-line, .fwin-active .f-mid .c-border { color: var(--border-bright); }
+/* line-height: 1 — box-drawing символы стыкуются в непрерывные линии */
+#left, #sep { margin: 0; line-height: 1; white-space: pre; overflow: hidden; }
+#sep { color: var(--sep); text-align: center; }
+
+#right { overflow: hidden; }
+#right .rline { line-height: 1; white-space: pre; overflow: hidden; }
+
+/* папки: центрированные крупные [Name] без обводки */
+.fitem {
+  display: block; text-align: center;
+  font-size: 1.25em; line-height: 1.3; font-weight: 700;
+  margin: 8px 0; color: var(--folder); white-space: pre;
+}
+.fitem.active { background: var(--active-bg); color: var(--active-fg); }
 
 #cmdline { line-height: 24px; height: 24px; white-space: pre; overflow: hidden; padding: 0 8px; }
 #hotkeys {
@@ -85,9 +95,11 @@ html, body {
 #hotkeys .k:first-child { margin-left: 0; }
 
 .c-border { color: var(--border); }
+.c-col { color: var(--dim); }            /* приглушённые разделители колонок */
 .c-hdr { color: var(--hdr); font-weight: 700; }
 .c-link { color: var(--link); }
 .c-url { color: var(--url); }
+.c-mtime { color: var(--mtime); }
 .c-dim { color: var(--dim); }
 .c-prompt { color: var(--prompt); font-weight: 700; }
 .c-warn { color: var(--warn); font-weight: 700; }
@@ -96,5 +108,53 @@ html, body {
 .cursor { background: var(--text); animation: blink 1s steps(1) infinite; }
 @keyframes blink { 50% { opacity: 0; } }
 
+.sort-title, .sort-mtime { cursor: pointer; }
+.sort-title:hover, .sort-mtime:hover { color: var(--border-bright); }
+
 #kbd { position: fixed; left: -200px; top: 0; opacity: 0; }
 #probe { position: fixed; visibility: hidden; white-space: pre; font-size: var(--font-size); }
+
+/* --- v0.5: правая панель как колонка целых ячеек, выделение не наезжает --- */
+#right { display: flex; flex-direction: column; }
+#right .rline { flex: 0 0 auto; }
+#right .flist { flex: 1 1 auto; overflow: hidden; }
+/* height == line-height (целые px): фон-выделение занимает ровно ячейку,
+   заканчивается там, где начинается верхняя строка (как в MC) */
+.fitem { height: 26px; line-height: 26px; margin: 0; }
+
+/* --- v0.6: строки-блоки, выделение ровно по строке, ASCII-маркеры --- */
+:root { --lh: 14px; }
+
+#left .row {
+  display: block;
+  height: var(--lh);
+  line-height: var(--lh);
+  white-space: pre;
+  overflow: hidden;
+}
+#left .row.inv-row { background: var(--active-bg); }
+#left .row.inv-row, #left .row.inv-row * { color: var(--active-fg); }
+
+/* инверсный блок-метка в заголовке панели: inline-block, фон ровно --lh */
+.blk {
+  display: inline-block;
+  height: var(--lh);
+  line-height: var(--lh);
+  vertical-align: top;
+  background: var(--active-bg);
+  color: var(--active-fg);
+}
+
+/* мигающий курсор: inline-block шириной 1ch, не вылезает по вертикали */
+.cursor {
+  display: inline-block;
+  width: 1ch;
+  height: var(--lh);
+  line-height: var(--lh);
+  vertical-align: top;
+}
+
+.c-fav { color: var(--hdr); font-weight: 700; }
+
+#sep { line-height: var(--lh); }
+#right .rline { line-height: var(--lh); height: var(--lh); }

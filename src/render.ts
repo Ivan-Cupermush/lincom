@@ -1,9 +1,18 @@
 //! Символьный рендер интерфейса в стиле Midnight Commander.
+//!
+//! Принципы аутентичности и надёжности:
+//!  - каждая строка левой панели — отдельный block-div высотой ровно --lh,
+//!    поэтому фон выделения занимает ровно одну строку и не наезжает;
+//!  - все маркеры внутри строк — ASCII или box-drawing из моно-шрифта
+//!    (`*` избранное, `+`/`-` сортировка), чтобы ширина никогда не плыла;
+//!  - вертикали стыкуются (line-height == height == --lh);
+//!  - между панелями одна двойная линия, сверху уголок ╥, снизу ;
+//!  - правая панель: центрированные крупные [Name] целыми ячейками.
 
-import type { State } from "./types";
+import type { Link, SortState, State } from "./types";
 
 let charW = 8;
-let lineH = 20;
+let lineH = 14;
 
 export function measure(): void {
   const probe = document.getElementById("probe")!;
@@ -31,69 +40,139 @@ function offsetFor(cursor: number, len: number, visible: number): number {
   return Math.max(0, off);
 }
 
+function formatDateTime(iso: string): string {
+  try {
+    const d = new Date(iso + "Z");
+    if (Number.isNaN(d.getTime())) return iso.slice(0, 16).replace("T", " ");
+    const pad = (n: number) => String(n).padStart(2, "0");
+    return `${d.getFullYear()}-${pad(d.getMonth() + 1)}-${pad(d.getDate())} ${pad(d.getHours())}:${pad(d.getMinutes())}`;
+  } catch {
+    return iso;
+  }
+}
+
+function sortLinks(links: Link[], sort: SortState | null): Link[] {
+  const copy = [...links];
+  copy.sort((a, b) => {
+    if (a.isFavorite !== b.isFavorite) return a.isFavorite ? -1 : 1;
+    if (!sort) return 0;
+    let cmp = 0;
+    if (sort.column === "title") {
+      cmp = a.title.localeCompare(b.title, undefined, { sensitivity: "base" });
+    } else {
+      cmp = a.updatedAt.localeCompare(b.updatedAt);
+    }
+    return sort.direction === "asc" ? cmp : -cmp;
+  });
+  return copy;
+}
+
+function sortSign(state: State, col: "title" | "updatedAt"): string {
+  if (state.sort?.column !== col) return "";
+  return state.sort.direction === "asc" ? "+" : "-";
+}
+
+function sortInd(state: State): string {
+  if (!state.sort) return "[^]";
+  return state.sort.direction === "asc" ? "[+]" : "[-]";
+}
+
+function headerLeft(state: State, label: string, cols: number): string {
+  const prefix = "<─ ";
+  const suffix = ` ${sortInd(state)}─`;
+  const avail = Math.max(4, cols - prefix.length - suffix.length - 1);
+  const lab = trunc(label, avail);
+  const dashes = Math.max(0, cols - prefix.length - lab.length - 1 - suffix.length);
+  return (
+    `<span class="c-border">${prefix}</span>` +
+    `<span class="blk">${esc(lab)}</span>` +
+    `<span class="c-border"> ${"─".repeat(dashes)}${suffix}</span>`
+  );
+}
+
+function headerRight(label: string, cols: number): string {
+  const prefix = "─ ";
+  const suffix = " [^]>";
+  const avail = Math.max(4, cols - prefix.length - suffix.length - 1);
+  const lab = trunc(label, avail);
+  const dashes = Math.max(0, cols - prefix.length - lab.length - 1 - suffix.length);
+  return (
+    `<span class="c-border">${prefix}</span>` +
+    `<span class="blk">${esc(lab)}</span>` +
+    `<span class="c-border"> ${"─".repeat(dashes)}${suffix}</span>`
+  );
+}
+
 function renderLeft(state: State, cols: number, rows: number): string {
-  const links = state.data.links.filter((l) => l.folderId === state.currentFolderId);
+  const rawLinks = state.data.links.filter((l) => l.folderId === state.currentFolderId);
+  const links = sortLinks(rawLinks, state.sort);
   const folder = state.data.folders.find((f) => f.id === state.currentFolderId);
-  const inner = cols - 2;
   const out: string[] = [];
 
-  let head = ` ${folder ? folder.name : "?"} · ${links.length} link${links.length === 1 ? "" : "s"} `;
-  head = trunc(head, inner);
-  out.push(
-    `<span class="c-border">┌</span><span class="c-hdr">${esc(head)}</span>` +
-    `<span class="c-border">${"─".repeat(Math.max(0, inner - head.length))}┐</span>`,
+  const row = (html: string, active = false): void => {
+    out.push(`<div class="row${active ? " inv-row" : ""}">${html}</div>`);
+  };
+
+  const label = `${folder ? folder.name : "?"} · ${links.length} link${links.length === 1 ? "" : "s"}`;
+  row(headerLeft(state, label, cols));
+
+  const titleW = Math.max(8, Math.floor(cols * 0.40));
+  const urlW = Math.max(8, Math.floor(cols * 0.35));
+  const mtimeW = Math.max(6, cols - titleW - urlW - 2);
+  const textW = titleW - 1;
+
+  row(
+    `<span class="c-hdr sort-title">${esc(trunc(" Name" + sortSign(state, "title"), titleW).padEnd(titleW))}</span>` +
+    `<span class="c-col">│</span>` +
+    `<span class="c-hdr">${esc(trunc(" URL", urlW).padEnd(urlW))}</span>` +
+    `<span class="c-col">│</span>` +
+    `<span class="c-hdr sort-mtime">${esc(trunc(" MTime" + sortSign(state, "updatedAt"), mtimeW).padEnd(mtimeW))}</span>`,
   );
 
-  const visible = Math.max(1, rows - 2);
+  const visible = Math.max(1, rows - 3);
   const offset = offsetFor(state.leftCursor, links.length, visible);
-  const titleW = Math.max(10, Math.floor(inner * 0.4));
-  const urlW = inner - titleW;
 
   for (let r = 0; r < visible; r++) {
     const i = offset + r;
     if (i < links.length) {
       const l = links[i];
       const active = state.panel === "left" && i === state.leftCursor;
-      const t = trunc(l.title, titleW).padEnd(titleW);
-      const u = trunc(l.url, urlW);
-      const pad = " ".repeat(Math.max(0, inner - t.length - u.length));
-      const content =
+      const fav = l.isFavorite ? "*" : " ";
+      const t = trunc(l.title, textW).padEnd(textW);
+      const u = trunc(l.url, urlW).padEnd(urlW);
+      const m = formatDateTime(l.updatedAt).padEnd(mtimeW).slice(0, mtimeW);
+      row(
+        `<span class="c-fav">${fav}</span>` +
         `<span class="c-link">${esc(t)}</span>` +
-        `<span class="c-url">${esc(u)}</span>${pad}`;
-      out.push(
-        `<span class="c-border">│</span>` +
-        (active ? `<span class="inv">${content}</span>` : content) +
-        `<span class="c-border">│</span>`,
+        `<span class="c-col">│</span>` +
+        `<span class="c-url">${esc(u)}</span>` +
+        `<span class="c-col">│</span>` +
+        `<span class="c-mtime">${esc(m)}</span>`,
+        active,
       );
     } else {
-      out.push(
-        `<span class="c-border">│</span>${" ".repeat(inner)}<span class="c-border">│</span>`,
-      );
+      row(" ".repeat(cols));
     }
   }
-  out.push(`<span class="c-border">└${"─".repeat(inner)}┘</span>`);
-  return out.join("\n");
+
+  row(`<span class="c-border">${"─".repeat(cols)}</span>`);
+  return out.join("");
 }
 
 function renderRight(state: State, cols: number): string {
-  const inner = cols - 2;
-  return state.data.folders
+  const count = state.data.folders.length;
+  const head = headerRight(`Folders · ${count}`, cols);
+
+  const items = state.data.folders
     .map((f, i) => {
       const active = state.panel === "right" && i === state.rightCursor;
-      const label = f.isZero ? `[ ◆ ${f.name} ]` : `[ ${f.name} ]`;
-      const top = `┌${"─".repeat(inner)}┐`;
-      const bot = `└${"─".repeat(inner)}┘`;
-      return (
-        `<div class="fwin${active ? " fwin-active" : ""}">` +
-        `<div class="c-border f-line">${top}</div>` +
-        `<div class="f-mid"><span class="c-border">│</span>` +
-        `<span class="f-name">${esc(label)}</span>` +
-        `<span class="c-border">│</span></div>` +
-        `<div class="c-border f-line">${bot}</div>` +
-        `</div>`
-      );
+      const label = f.isZero ? `[◆${f.name}]` : `[${f.name}]`;
+      return `<div class="fitem${active ? " active" : ""}">${esc(label)}</div>`;
     })
     .join("");
+
+  const bottom = `<div class="rline"><span class="c-border">${"─".repeat(cols)}</span></div>`;
+  return `<div class="rline">${head}</div><div class="flist">${items}</div>${bottom}`;
 }
 
 function renderCmd(state: State): string {
@@ -108,28 +187,36 @@ function renderCmd(state: State): string {
     return `<span class="c-warn">${esc(state.confirm.message)} (y/N): </span><span class="cursor"> </span>`;
   }
   const n = state.data.links.filter((l) => l.folderId === state.currentFolderId).length;
+  const sortInfo = state.sort ? ` · sort: ${state.sort.column} ${state.sort.direction}` : "";
   return (
-    `<span class="c-dim"> ${state.data.folders.length} folders · ${n} links here` +
-    ` · theme: ${state.theme} · Esc: back to Zero · lincom v0.2.0</span>`
+    `<span class="c-dim"> ${state.data.folders.length} folders · ${n} links here${sortInfo}` +
+    ` · theme: ${state.theme} · Esc: back to Main · lincom v0.6.0</span>`
   );
 }
 
 export function render(state: State): void {
   const panels = document.getElementById("panels")!;
-  const leftEl = document.getElementById("left") as HTMLPreElement;
+  const leftEl = document.getElementById("left")!;
   const rightEl = document.getElementById("right")!;
+  const sepEl = document.getElementById("sep") as HTMLPreElement;
   const cmdEl = document.getElementById("cmdline")!;
 
   const rect = panels.getBoundingClientRect();
-  const totalCols = Math.max(40, Math.floor(rect.width / charW));
-  const rightCols = Math.max(22, Math.min(38, Math.floor(totalCols / 3)));
-  const leftCols = totalCols - rightCols;
-  const rows = Math.max(6, Math.floor(rect.height / lineH));
+  const totalCols = Math.max(60, Math.floor(rect.width / charW));
+  const rightCols = Math.max(20, Math.min(34, Math.floor(totalCols / 3)));
+  const leftCols = totalCols - rightCols - 1;
+  const rows = Math.max(5, Math.floor(rect.height / lineH));
+  const heightPx = rows * lineH;
 
   leftEl.style.width = `${leftCols}ch`;
+  sepEl.style.width = `1ch`;
   rightEl.style.width = `${rightCols}ch`;
+  leftEl.style.height = `${heightPx}px`;
+  sepEl.style.height = `${heightPx}px`;
+  rightEl.style.height = `${heightPx}px`;
 
   leftEl.innerHTML = renderLeft(state, leftCols, rows);
+  sepEl.innerHTML = `╥\n${"║\n".repeat(Math.max(0, rows - 2))}╨\n`;
   rightEl.innerHTML = renderRight(state, rightCols);
   cmdEl.innerHTML = renderCmd(state);
 }

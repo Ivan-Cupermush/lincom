@@ -8,7 +8,7 @@
   </head>
   <body>
     <div id="titlebar" data-tauri-drag-region>
-      <span data-tauri-drag-region>◆ lincom — link manager</span>
+      <span data-tauri-drag-region>Link Commander</span>
       <span id="win-controls">
         <button id="btn-min" title="Minimize">─</button>
         <button id="btn-close" title="Close">✕</button>
@@ -17,11 +17,12 @@
 
     <div id="screen">
       <div id="panels">
-        <pre id="left"></pre>
+        <div id="left"></div>
+        <pre id="sep"></pre>
         <div id="right"></div>
       </div>
       <div id="cmdline"></div>
-      <div id="hotkeys"><span class="k">C-N</span> Add <span class="k">C-S-N</span> Mkdir <span class="k">C-R</span> Edit <span class="k">Enter</span> Open <span class="k">Del</span> Delete <span class="k">C-S-T</span> Theme <span class="k">Esc</span> Back <span class="k">C-Q</span> Quit</div>
+      <div id="hotkeys"><span class="k">C-N</span> Add <span class="k">C-S-N</span> Mkdir <span class="k">C-R</span> Edit <span class="k">C-F</span> Fav <span class="k">Enter</span> Open <span class="k">Del</span> Delete <span class="k">C-S-T</span> Theme <span class="k">Esc</span> Back <span class="k">C-Q</span> Quit</div>
     </div>
 
     <input id="kbd" autocomplete="off" spellcheck="false" />

@@ -18,6 +18,8 @@ pub struct Link {
     pub title: String,
     pub url: String,
     pub description: String,
+    pub is_favorite: bool,
+    pub updated_at: String,
 }
 
 #[derive(Debug, Clone, Serialize)]

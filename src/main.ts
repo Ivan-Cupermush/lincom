@@ -16,11 +16,10 @@ const state: State = {
   input: null,
   confirm: null,
   theme: currentTheme(),
+  sort: null,
 };
 
 const kbd = document.getElementById("kbd") as HTMLInputElement;
-
-/* ---------------- вспомогательные ---------------- */
 
 function visibleLinks(): Link[] {
   return state.data.links.filter((l) => l.folderId === state.currentFolderId);
@@ -46,8 +45,6 @@ function redraw(): void {
   render(state);
 }
 
-/* ---------------- история ввода ---------------- */
-
 function histGet(key: string): string[] {
   try {
     return JSON.parse(localStorage.getItem(`lincom.hist.${key}`) ?? "[]") as string[];
@@ -63,8 +60,6 @@ function histPush(key: string, value: string): void {
   if (arr[arr.length - 1] !== v) arr.push(v);
   localStorage.setItem(`lincom.hist.${key}`, JSON.stringify(arr.slice(-50)));
 }
-
-/* ---------------- режим ввода ---------------- */
 
 function startInput(stages: InputStage[], onDone: (values: string[]) => Promise<void>): void {
   state.input = { stages, idx: 0, draft: "", histPos: null, onDone };
@@ -134,8 +129,6 @@ async function acceptStage(): Promise<void> {
   clampCursors();
   redraw();
 }
-
-/* ---------------- диалоги ---------------- */
 
 function dialogCreateFolder(): void {
   startInput(
@@ -223,7 +216,10 @@ function askDeleteFolder(id: number): void {
   redraw();
 }
 
-/* ---------------- навигация и действия ---------------- */
+async function toggleFav(id: number): Promise<void> {
+  await api.toggleFavorite(id);
+  await refresh();
+}
 
 function move(d: number): void {
   if (state.panel === "left") {
@@ -286,10 +282,15 @@ function deleteCurrent(): void {
   }
 }
 
-/* ---------------- клавиатура ---------------- */
+function favCurrent(): void {
+  if (state.panel === "left") {
+    const l = visibleLinks()[state.leftCursor];
+    if (l) void toggleFav(l.id);
+  }
+}
 
 document.addEventListener("keydown", (e) => {
-  if (state.input) return; // режим ввода обрабатывает #kbd
+  if (state.input) return;
 
   if (state.confirm) {
     e.preventDefault();
@@ -316,6 +317,7 @@ document.addEventListener("keydown", (e) => {
   if (ctrlOnly && e.code === "KeyN") { e.preventDefault(); dialogCreateLink(); return; }
   if (ctrlOnly && e.code === "KeyR") { e.preventDefault(); editCurrent(); return; }
   if (ctrlOnly && e.code === "KeyQ") { e.preventDefault(); void getCurrentWindow().close(); return; }
+  if (ctrlOnly && e.code === "KeyF") { e.preventDefault(); favCurrent(); return; }
 
   switch (e.code) {
     case "ArrowLeft":
@@ -351,8 +353,6 @@ kbd.addEventListener("input", () => {
   inp.histPos = null;
   redraw();
 });
-
-/* ---------------- кнопки окна и старт ---------------- */
 
 document.getElementById("btn-min")?.addEventListener("click", () => {
   void getCurrentWindow().minimize();

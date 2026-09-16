@@ -12,6 +12,8 @@ export interface Link {
   title: string;
   url: string;
   description: string;
+  isFavorite: boolean;
+  updatedAt: string;
 }
 
 export interface AppData {
@@ -20,6 +22,14 @@ export interface AppData {
 }
 
 export type Panel = "left" | "right";
+
+export type SortColumn = "title" | "updatedAt";
+export type SortDirection = "asc" | "desc";
+
+export interface SortState {
+  column: SortColumn;
+  direction: SortDirection;
+}
 
 export interface InputStage {
   prompt: string;
@@ -49,4 +59,5 @@ export interface State {
   input: InputState | null;
   confirm: ConfirmState | null;
   theme: "light" | "dark";
+  sort: SortState | null;
 }
