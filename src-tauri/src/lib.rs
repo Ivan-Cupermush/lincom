@@ -82,10 +82,16 @@ fn delete_link(state: State<AppState>, id: i64) -> CmdResult<()> {
     state.0.lock().map_err(err)?.delete_link(id).map_err(err)
 }
 
+#[tauri::command]
+fn reorder_folders(state: State<AppState>, ids: Vec<i64>) -> CmdResult<()> {
+    state.0.lock().map_err(err)?.reorder_folders(&ids).map_err(err)
+}
+
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
     tauri::Builder::default()
         .plugin(tauri_plugin_opener::init())
+        .plugin(tauri_plugin_clipboard_manager::init())
         .setup(|app| {
             let dir = app.path().app_data_dir().map_err(err)?;
             std::fs::create_dir_all(&dir).map_err(err)?;
@@ -101,7 +107,8 @@ pub fn run() {
             update_link,
             toggle_favorite,
             delete_folder,
-            delete_link
+            delete_link,
+            reorder_folders
         ])
         .run(tauri::generate_context!())
         .expect("error while running tauri application");

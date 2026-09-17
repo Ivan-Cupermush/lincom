@@ -4,6 +4,7 @@ export interface Folder {
   id: number;
   name: string;
   isZero: boolean;
+  sortOrder: number;
 }
 
 export interface Link {
@@ -47,7 +48,13 @@ export interface InputState {
 
 export interface ConfirmState {
   message: string;
+  pendingInput: string;
   action: () => Promise<void>;
+}
+
+export interface ReorderState {
+  active: boolean;
+  cursor: number;
 }
 
 export interface State {
@@ -60,4 +67,7 @@ export interface State {
   confirm: ConfirmState | null;
   theme: "light" | "dark";
   sort: SortState | null;
+  selectedLinks: Set<number>;
+  spaceHeld: boolean;
+  reorder: ReorderState;
 }

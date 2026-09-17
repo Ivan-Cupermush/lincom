@@ -8,6 +8,7 @@ pub struct Folder {
     pub id: i64,
     pub name: String,
     pub is_zero: bool,
+    pub sort_order: i64,
 }
 
 #[derive(Debug, Clone, Serialize)]

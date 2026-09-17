@@ -2,6 +2,7 @@
 
 import { getCurrentWindow } from "@tauri-apps/api/window";
 import { openUrl } from "@tauri-apps/plugin-opener";
+import { writeText } from "@tauri-apps/plugin-clipboard-manager";
 import { api } from "./api";
 import { measure, render } from "./render";
 import { applyTheme, currentTheme, toggleTheme } from "./theme";
@@ -17,6 +18,9 @@ const state: State = {
   confirm: null,
   theme: currentTheme(),
   sort: null,
+  selectedLinks: new Set(),
+  spaceHeld: false,
+  reorder: { active: false, cursor: 0 },
 };
 
 const kbd = document.getElementById("kbd") as HTMLInputElement;
@@ -34,6 +38,9 @@ function clampCursors(): void {
   const R = state.data.folders.length;
   state.leftCursor = L === 0 ? 0 : Math.min(state.leftCursor, L - 1);
   state.rightCursor = R === 0 ? 0 : Math.min(state.rightCursor, R - 1);
+  if (state.reorder.active) {
+    state.reorder.cursor = R === 0 ? 0 : Math.min(state.reorder.cursor, R - 1);
+  }
 }
 
 async function refresh(): Promise<void> {
@@ -43,6 +50,14 @@ async function refresh(): Promise<void> {
 
 function redraw(): void {
   render(state);
+}
+
+function maybeClearSelection(exempt: boolean): void {
+  if (exempt || state.spaceHeld) return;
+  if (state.selectedLinks.size > 0) {
+    state.selectedLinks.clear();
+    redraw();
+  }
 }
 
 function histGet(key: string): string[] {
@@ -194,6 +209,7 @@ function askDeleteLink(id: number): void {
   if (!l) return;
   state.confirm = {
     message: `Delete link "${l.title}"?`,
+    pendingInput: "",
     action: async () => {
       await api.deleteLink(id);
       await refresh();
@@ -207,6 +223,7 @@ function askDeleteFolder(id: number): void {
   if (!f || f.isZero) return;
   state.confirm = {
     message: `Delete folder "${f.name}" with its links?`,
+    pendingInput: "",
     action: async () => {
       await api.deleteFolder(id);
       await refresh();
@@ -222,10 +239,30 @@ async function toggleFav(id: number): Promise<void> {
 }
 
 function move(d: number): void {
+  if (state.reorder.active) {
+    const n = state.data.folders.length;
+    if (n === 0) return;
+    const old = state.reorder.cursor;
+    const next = old + d;
+    if (next < 0 || next >= n) return;
+    const ids = state.data.folders.map((f) => f.id);
+    [ids[old], ids[next]] = [ids[next], ids[old]];
+    state.data.folders = ids.map((id) => state.data.folders.find((f) => f.id === id)!);
+    state.reorder.cursor = next;
+    redraw();
+    return;
+  }
+
   if (state.panel === "left") {
     const n = visibleLinks().length;
     if (n === 0) return;
+    const old = state.leftCursor;
     state.leftCursor = Math.max(0, Math.min(n - 1, state.leftCursor + d));
+    if (state.spaceHeld) {
+      const links = visibleLinks();
+      if (links[old]) state.selectedLinks.add(links[old].id);
+      if (links[state.leftCursor]) state.selectedLinks.add(links[state.leftCursor].id);
+    }
   } else {
     const n = state.data.folders.length;
     if (n === 0) return;
@@ -237,7 +274,10 @@ function move(d: number): void {
 function activate(): void {
   if (state.panel === "left") {
     const l = visibleLinks()[state.leftCursor];
-    if (l) void openUrl(l.url);
+    if (l) {
+      void openUrl(l.url);
+      redraw();
+    }
   } else {
     const f = state.data.folders[state.rightCursor];
     if (f) {
@@ -289,20 +329,107 @@ function favCurrent(): void {
   }
 }
 
+async function copyLinks(): Promise<void> {
+  if (state.panel !== "left") return;
+  const links = visibleLinks();
+  let toCopy: Link[];
+  if (state.selectedLinks.size > 0) {
+    toCopy = links.filter((l) => state.selectedLinks.has(l.id));
+  } else {
+    const l = links[state.leftCursor];
+    if (!l) return;
+    toCopy = [l];
+  }
+  const text = toCopy.map((l) => `[${l.title}]: ${l.url}`).join("\n");
+  await writeText(text);
+  state.selectedLinks.clear();
+  redraw();
+}
+
+function jumpToFolder(num: number): void {
+  const f = state.data.folders[num];
+  if (f) {
+    state.currentFolderId = f.id;
+    state.leftCursor = 0;
+    state.panel = "left";
+    redraw();
+  }
+}
+
+function toggleReorder(): void {
+  if (state.reorder.active) {
+    const ids = state.data.folders.map((f) => f.id);
+    void api.reorderFolders(ids).then(async () => {
+      await refresh();
+      state.reorder.active = false;
+      redraw();
+    });
+  } else {
+    state.reorder.active = true;
+    state.reorder.cursor = state.rightCursor;
+    state.panel = "right";
+    redraw();
+  }
+}
+
+const MODIFIER_CODES = new Set([
+  "ControlLeft", "ControlRight",
+  "ShiftLeft", "ShiftRight",
+  "AltLeft", "AltRight",
+  "MetaLeft", "MetaRight",
+]);
+
 document.addEventListener("keydown", (e) => {
+  // 1. Режим ввода — обработчик ниже на #kbd, здесь выходим.
   if (state.input) return;
 
+  // 2. ИГНОРИРУЕМ нажатия самих модификаторов.
+  //    Иначе keydown Control приходил раньше чем Ctrl+C,
+  //    считался "действием без пробела" и стирал выделение.
+  if (MODIFIER_CODES.has(e.code)) return;
+
+  // 3. Режим подтверждения.
   if (state.confirm) {
     e.preventDefault();
-    if (e.key === "y" || e.key === "Y") {
-      const action = state.confirm.action;
-      state.confirm = null;
-      void action().then(() => {
-        clampCursors();
+    if (e.key === "Enter") {
+      if (state.confirm.pendingInput.toLowerCase() === "y") {
+        const action = state.confirm.action;
+        state.confirm = null;
+        void action().then(() => {
+          clampCursors();
+          redraw();
+        });
+      } else {
+        state.confirm = null;
         redraw();
-      });
-    } else {
+      }
+    } else if (e.key === "Escape") {
       state.confirm = null;
+      redraw();
+    } else if (e.key.length === 1) {
+      state.confirm.pendingInput += e.key;
+      redraw();
+    }
+    return;
+  }
+
+  // 4. Режим перестановки папок.
+  if (state.reorder.active) {
+    e.preventDefault();
+    if (e.code === "ArrowLeft") {
+      state.reorder.cursor = Math.max(0, state.reorder.cursor - 1);
+      redraw();
+    } else if (e.code === "ArrowRight") {
+      state.reorder.cursor = Math.min(state.data.folders.length - 1, state.reorder.cursor + 1);
+      redraw();
+    } else if (e.code === "ArrowUp") {
+      move(-1);
+    } else if (e.code === "ArrowDown") {
+      move(1);
+    } else if (e.key === "Enter") {
+      toggleReorder();
+    } else if (e.key === "Escape") {
+      state.reorder.active = false;
       redraw();
     }
     return;
@@ -312,12 +439,33 @@ document.addEventListener("keydown", (e) => {
   const ctrlShift = ctrl && e.shiftKey;
   const ctrlOnly = ctrl && !e.shiftKey;
 
+  // 5. Пробел — старт/расширение выделения.
+  if (e.code === "Space") {
+    e.preventDefault();
+    state.spaceHeld = true;
+    const l = visibleLinks()[state.leftCursor];
+    if (state.panel === "left" && l) state.selectedLinks.add(l.id);
+    redraw();
+    return;
+  }
+
+  // 6. Любое действие без пробела сбрасывает выделение,
+  //    КРОМЕ Ctrl+C (ему выделение нужно чтобы копировать несколько).
+  maybeClearSelection(ctrlOnly && e.code === "KeyC");
+
   if (ctrlShift && e.code === "KeyN") { e.preventDefault(); dialogCreateFolder(); return; }
   if (ctrlShift && e.code === "KeyT") { e.preventDefault(); state.theme = toggleTheme(); redraw(); return; }
+  if (ctrlShift && e.code === "KeyH") { e.preventDefault(); toggleReorder(); return; }
   if (ctrlOnly && e.code === "KeyN") { e.preventDefault(); dialogCreateLink(); return; }
   if (ctrlOnly && e.code === "KeyR") { e.preventDefault(); editCurrent(); return; }
-  if (ctrlOnly && e.code === "KeyQ") { e.preventDefault(); void getCurrentWindow().close(); return; }
   if (ctrlOnly && e.code === "KeyF") { e.preventDefault(); favCurrent(); return; }
+  if (ctrlOnly && e.code === "KeyC") { e.preventDefault(); void copyLinks(); return; }
+
+  if (e.key >= "0" && e.key <= "9" && !ctrl && !e.altKey && !e.metaKey) {
+    e.preventDefault();
+    jumpToFolder(parseInt(e.key));
+    return;
+  }
 
   switch (e.code) {
     case "ArrowLeft":
@@ -338,12 +486,21 @@ document.addEventListener("keydown", (e) => {
   }
 });
 
+document.addEventListener("keyup", (e) => {
+  if (e.code === "Space") {
+    state.spaceHeld = false;
+    redraw();
+  }
+});
+
 kbd.addEventListener("keydown", (e) => {
   if (!state.input) return;
   if (e.key === "Enter") { e.preventDefault(); void acceptStage(); }
   else if (e.key === "Escape") { e.preventDefault(); cancelInput(); }
   else if (e.key === "ArrowUp") { e.preventDefault(); histMove(-1); }
   else if (e.key === "ArrowDown") { e.preventDefault(); histMove(1); }
+  else if (e.ctrlKey && e.code === "KeyA") { e.preventDefault(); kbd.select(); }
+  else if (e.ctrlKey && e.code === "KeyC") { e.preventDefault(); document.execCommand("copy"); }
 });
 
 kbd.addEventListener("input", () => {

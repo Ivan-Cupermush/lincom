@@ -158,3 +158,22 @@ html, body {
 
 #sep { line-height: var(--lh); }
 #right .rline { line-height: var(--lh); height: var(--lh); }
+
+/* --- v0.7: множественное выделение, режим reorder, курсор в диалоге --- */
+.sel-row { background: var(--border); }
+.sel-row, .sel-row * { color: var(--active-fg); }
+.sel-row.inv-row { background: var(--active-bg); }
+
+.fitem.reorder-active { background: var(--warn); color: var(--kbd-fg); }
+.blk.reorder { background: var(--warn); color: var(--kbd-fg); }
+
+/* Курсор в диалоге: inline-block, вертикальное выравнивание по верху, высота == line-height */
+.cursor {
+  display: inline-block;
+  width: 1ch;
+  height: var(--lh);
+  line-height: var(--lh);
+  vertical-align: top;
+  background: var(--text);
+  animation: blink 1s steps(1) infinite;
+}

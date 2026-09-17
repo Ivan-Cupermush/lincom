@@ -1,13 +1,4 @@
 //! Символьный рендер интерфейса в стиле Midnight Commander.
-//!
-//! Принципы аутентичности и надёжности:
-//!  - каждая строка левой панели — отдельный block-div высотой ровно --lh,
-//!    поэтому фон выделения занимает ровно одну строку и не наезжает;
-//!  - все маркеры внутри строк — ASCII или box-drawing из моно-шрифта
-//!    (`*` избранное, `+`/`-` сортировка), чтобы ширина никогда не плыла;
-//!  - вертикали стыкуются (line-height == height == --lh);
-//!  - между панелями одна двойная линия, сверху уголок ╥, снизу ;
-//!  - правая панель: центрированные крупные [Name] целыми ячейками.
 
 import type { Link, SortState, State } from "./types";
 
@@ -90,15 +81,15 @@ function headerLeft(state: State, label: string, cols: number): string {
   );
 }
 
-function headerRight(label: string, cols: number): string {
+function headerRight(label: string, cols: number, reorder = false): string {
   const prefix = "─ ";
-  const suffix = " [^]>";
+  const suffix = reorder ? " [REORDER]>" : " [^]>";
   const avail = Math.max(4, cols - prefix.length - suffix.length - 1);
   const lab = trunc(label, avail);
   const dashes = Math.max(0, cols - prefix.length - lab.length - 1 - suffix.length);
   return (
     `<span class="c-border">${prefix}</span>` +
-    `<span class="blk">${esc(lab)}</span>` +
+    `<span class="blk${reorder ? " reorder" : ""}">${esc(lab)}</span>` +
     `<span class="c-border"> ${"─".repeat(dashes)}${suffix}</span>`
   );
 }
@@ -109,8 +100,9 @@ function renderLeft(state: State, cols: number, rows: number): string {
   const folder = state.data.folders.find((f) => f.id === state.currentFolderId);
   const out: string[] = [];
 
-  const row = (html: string, active = false): void => {
-    out.push(`<div class="row${active ? " inv-row" : ""}">${html}</div>`);
+  const row = (html: string, active = false, selected = false): void => {
+    const cls = [active ? "inv-row" : "", selected ? "sel-row" : ""].filter(Boolean).join(" ");
+    out.push(`<div class="row${cls ? " " + cls : ""}">${html}</div>`);
   };
 
   const label = `${folder ? folder.name : "?"} · ${links.length} link${links.length === 1 ? "" : "s"}`;
@@ -137,6 +129,7 @@ function renderLeft(state: State, cols: number, rows: number): string {
     if (i < links.length) {
       const l = links[i];
       const active = state.panel === "left" && i === state.leftCursor;
+      const selected = state.selectedLinks.has(l.id);
       const fav = l.isFavorite ? "*" : " ";
       const t = trunc(l.title, textW).padEnd(textW);
       const u = trunc(l.url, urlW).padEnd(urlW);
@@ -149,6 +142,7 @@ function renderLeft(state: State, cols: number, rows: number): string {
         `<span class="c-col">│</span>` +
         `<span class="c-mtime">${esc(m)}</span>`,
         active,
+        selected,
       );
     } else {
       row(" ".repeat(cols));
@@ -161,13 +155,18 @@ function renderLeft(state: State, cols: number, rows: number): string {
 
 function renderRight(state: State, cols: number): string {
   const count = state.data.folders.length;
-  const head = headerRight(`Folders · ${count}`, cols);
+  const reorder = state.reorder.active;
+  const head = headerRight(`Folders · ${count}`, cols, reorder);
 
   const items = state.data.folders
     .map((f, i) => {
-      const active = state.panel === "right" && i === state.rightCursor;
-      const label = f.isZero ? `[◆${f.name}]` : `[${f.name}]`;
-      return `<div class="fitem${active ? " active" : ""}">${esc(label)}</div>`;
+      const active = !reorder && state.panel === "right" && i === state.rightCursor;
+      const reorderActive = reorder && i === state.reorder.cursor;
+      const num = f.isZero ? 0 : i;
+      const numStr = num < 10 ? ` (${num})` : "";
+      const label = f.isZero ? `[◆${f.name}]${numStr}` : `[${f.name}]${numStr}`;
+      const cls = reorderActive ? "reorder-active" : active ? "active" : "";
+      return `<div class="fitem${cls ? " " + cls : ""}">${esc(label)}</div>`;
     })
     .join("");
 
@@ -184,13 +183,14 @@ function renderCmd(state: State): string {
     );
   }
   if (state.confirm) {
-    return `<span class="c-warn">${esc(state.confirm.message)} (y/N): </span><span class="cursor"> </span>`;
+    return `<span class="c-warn">${esc(state.confirm.message)} (y/N): </span><span class="c-value">${esc(state.confirm.pendingInput)}</span><span class="cursor"> </span>`;
   }
   const n = state.data.links.filter((l) => l.folderId === state.currentFolderId).length;
   const sortInfo = state.sort ? ` · sort: ${state.sort.column} ${state.sort.direction}` : "";
+  const selInfo = state.selectedLinks.size > 0 ? ` · ${state.selectedLinks.size} selected` : "";
   return (
-    `<span class="c-dim"> ${state.data.folders.length} folders · ${n} links here${sortInfo}` +
-    ` · theme: ${state.theme} · Esc: back to Main · lincom v0.6.0</span>`
+    `<span class="c-dim"> ${state.data.folders.length} folders · ${n} links here${sortInfo}${selInfo}` +
+    ` · theme: ${state.theme} · Esc: back to Main · lincom v0.7.0</span>`
   );
 }
 

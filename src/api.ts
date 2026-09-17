@@ -26,4 +26,6 @@ export const api = {
     invoke<boolean>("toggle_favorite", { id }),
   deleteFolder: (id: number): Promise<void> => invoke<void>("delete_folder", { id }),
   deleteLink: (id: number): Promise<void> => invoke<void>("delete_link", { id }),
+  reorderFolders: (ids: number[]): Promise<void> =>
+    invoke<void>("reorder_folders", { ids }),
 };

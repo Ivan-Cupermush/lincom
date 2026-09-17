@@ -23,13 +23,12 @@ impl Database {
     }
 
     fn migrate(&self) -> DbResult<()> {
-        // Создаём таблицы если их нет (для новых БД).
-        // Здесь DEFAULT datetime('now') работает нормально.
         self.conn.execute_batch(
             "CREATE TABLE IF NOT EXISTS folders (
-                id      INTEGER PRIMARY KEY AUTOINCREMENT,
-                name    TEXT    NOT NULL,
-                is_zero INTEGER NOT NULL DEFAULT 0
+                id         INTEGER PRIMARY KEY AUTOINCREMENT,
+                name       TEXT    NOT NULL,
+                is_zero    INTEGER NOT NULL DEFAULT 0,
+                sort_order INTEGER NOT NULL DEFAULT 0
             );
             CREATE TABLE IF NOT EXISTS links (
                 id            INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -43,8 +42,6 @@ impl Database {
             );",
         )?;
 
-        // Миграции для старых БД: ALTER TABLE не поддерживает DEFAULT с функциями,
-        // поэтому добавляем колонки БЕЗ DEFAULT, а потом проставляем значения.
         let columns: Vec<String> = {
             let mut st = self.conn.prepare("PRAGMA table_info(links)")?;
             let rows = st.query_map([], |r| r.get::<_, String>(1))?;
@@ -71,7 +68,27 @@ impl Database {
             self.conn.execute_batch("UPDATE links SET created_at = datetime('now') WHERE created_at = '';")?;
         }
 
-        // Создаём Main-папку если её нет
+        let folder_columns: Vec<String> = {
+            let mut st = self.conn.prepare("PRAGMA table_info(folders)")?;
+            let rows = st.query_map([], |r| r.get::<_, String>(1))?;
+            let mut out = Vec::new();
+            for row in rows {
+                if let Ok(name) = row {
+                    out.push(name);
+                }
+            }
+            out
+        };
+
+        if !folder_columns.iter().any(|c| c == "sort_order") {
+            self.conn.execute_batch(
+                "ALTER TABLE folders ADD COLUMN sort_order INTEGER NOT NULL DEFAULT 0;",
+            )?;
+            self.conn.execute_batch(
+                "UPDATE folders SET sort_order = id WHERE sort_order = 0;",
+            )?;
+        }
+
         let zero_count: i64 = self.conn.query_row(
             "SELECT COUNT(*) FROM folders WHERE is_zero = 1",
             [],
@@ -79,7 +96,7 @@ impl Database {
         )?;
         if zero_count == 0 {
             self.conn.execute(
-                "INSERT INTO folders (name, is_zero) VALUES ('Main', 1)",
+                "INSERT INTO folders (name, is_zero, sort_order) VALUES ('Main', 1, 0)",
                 [],
             )?;
         }
@@ -90,14 +107,15 @@ impl Database {
         let mut folders = Vec::new();
         {
             let mut st = self.conn.prepare(
-                "SELECT id, name, is_zero FROM folders
-                 ORDER BY is_zero DESC, name COLLATE NOCASE",
+                "SELECT id, name, is_zero, sort_order FROM folders
+                 ORDER BY is_zero DESC, sort_order ASC, name COLLATE NOCASE",
             )?;
             let rows = st.query_map([], |r| {
                 Ok(Folder {
                     id: r.get(0)?,
                     name: r.get(1)?,
                     is_zero: r.get::<_, i64>(2)? != 0,
+                    sort_order: r.get(3)?,
                 })
             })?;
             for f in rows {
@@ -129,14 +147,20 @@ impl Database {
     }
 
     pub fn create_folder(&self, name: &str) -> DbResult<Folder> {
+        let max_order: i64 = self.conn.query_row(
+            "SELECT COALESCE(MAX(sort_order), 0) FROM folders",
+            [],
+            |r| r.get(0),
+        )?;
         self.conn.execute(
-            "INSERT INTO folders (name, is_zero) VALUES (?1, 0)",
-            params![name],
+            "INSERT INTO folders (name, is_zero, sort_order) VALUES (?1, 0, ?2)",
+            params![name, max_order + 1],
         )?;
         Ok(Folder {
             id: self.conn.last_insert_rowid(),
             name: name.to_string(),
             is_zero: false,
+            sort_order: max_order + 1,
         })
     }
 
@@ -214,6 +238,18 @@ impl Database {
 
     pub fn delete_link(&self, id: i64) -> DbResult<()> {
         self.conn.execute("DELETE FROM links WHERE id = ?1", params![id])?;
+        Ok(())
+    }
+
+    pub fn reorder_folders(&self, ids: &[i64]) -> DbResult<()> {
+        let tx = self.conn.unchecked_transaction()?;
+        for (i, id) in ids.iter().enumerate() {
+            self.conn.execute(
+                "UPDATE folders SET sort_order = ?1 WHERE id = ?2",
+                params![i as i64, id],
+            )?;
+        }
+        tx.commit()?;
         Ok(())
     }
 }
