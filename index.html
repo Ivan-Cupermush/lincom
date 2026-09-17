@@ -8,12 +8,14 @@
   </head>
   <body>
     <div id="titlebar" data-tauri-drag-region>
-      <span data-tauri-drag-region>Link Commander</span>
+      <span id="appname" data-tauri-drag-region>Link Commander</span>
+      <div id="searchbox"><span id="searchline"></span></div>
       <span id="win-controls">
         <button id="btn-min" title="Minimize">─</button>
         <button id="btn-close" title="Close">✕</button>
       </span>
     </div>
+    <div id="searchdrop"></div>
 
     <div id="screen">
       <div id="panels">
@@ -22,7 +24,7 @@
         <div id="right"></div>
       </div>
       <div id="cmdline"></div>
-      <div id="hotkeys"><span class="k">C-N</span> Add <span class="k">C-S-N</span> Mkdir <span class="k">C-R</span> Edit <span class="k">C-F</span> Fav <span class="k">C-C</span> Copy <span class="k">C-S-H</span> Reorder <span class="k">Enter</span> Open <span class="k">Del</span> Delete <span class="k">C-S-T</span> Theme <span class="k">Esc</span> Back</div>
+      <div id="hotkeys"><span class="k">C-N</span> Add <span class="k">C-S-N</span> Mkdir <span class="k">C-R</span> Edit <span class="k">C-F</span> Fav <span class="k">C-C</span> Copy <span class="k">C-S</span> Search <span class="k">C-S-H</span> Reorder <span class="k">Enter</span> Open <span class="k">Del</span> Delete <span class="k">C-S-T</span> Theme <span class="k">Esc</span> Back</div>
     </div>
 
     <input id="kbd" autocomplete="off" spellcheck="false" />

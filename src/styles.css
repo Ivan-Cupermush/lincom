@@ -177,3 +177,75 @@ html, body {
   background: var(--text);
   animation: blink 1s steps(1) infinite;
 }
+
+/* --- v0.8: курсор диалога по высоте строки cmdline; Zero заперта в reorder --- */
+#cmdline .cursor { height: 24px; line-height: 24px; }
+.fitem.locked { opacity: 0.45; }
+
+/* --- v0.8: курсор диалога по высоте строки cmdline; Zero заперта в reorder --- */
+#cmdline .cursor { height: 24px; line-height: 24px; }
+.fitem.locked { opacity: 0.45; }
+
+/* --- v0.10: терминальный курсор (блок = одна ячейка, буква видна всегда) --- */
+/* Строка cmdline: текст и курсор живут в ячейке --lh, полоса центрируется паддингом. */
+#cmdline { line-height: var(--lh); padding: 5px 8px 0; }
+#cmdline .cursor { height: var(--lh); line-height: var(--lh); }
+
+/* Мигает ТОЛЬКО подложка блока; в фазе off буква видна обычным цветом,
+   как в настоящем терминале. */
+#cmdline .cursor { animation: cursor-blink 1s steps(1) infinite; }
+@keyframes cursor-blink {
+  0%, 54%   { background: var(--text); color: var(--active-fg); }
+  55%, 100% { background: transparent; color: inherit; }
+}
+
+/* --- эксперимент: акцент папок = солнечный синий из палитры Solarized --- */
+:root, [data-theme="light"] { --folder: #268bd2; }
+[data-theme="dark"]         { --folder: #268bd2; }
+
+/* --- v0.11: поиск в тайтлбаре + дропдаун; папки в цвет линий интерфейса --- */
+#titlebar { position: relative; }
+#searchbox { flex: 1 1 auto; display: none; justify-content: center; min-width: 0; }
+#searchline {
+  display: inline-block; width: 46ch; max-width: 46ch;
+  border: 1px solid var(--border); background: var(--bg);
+  line-height: 20px; padding: 0 6px; white-space: pre; overflow: hidden;
+}
+#searchdrop {
+  position: absolute; top: 30px; left: 50%; transform: translateX(-50%);
+  width: 72ch; max-width: 94vw;
+  background: var(--bg); border: 1px solid var(--border); border-top: none;
+  display: none; z-index: 60; box-shadow: 0 6px 18px rgba(0, 0, 0, 0.25);
+}
+#searchdrop .srow { line-height: 22px; white-space: pre; overflow: hidden; padding: 0 8px; }
+#searchdrop .srow.active { background: var(--active-bg); color: var(--active-fg); }
+#searchdrop .srow.active .s-folder,
+#searchdrop .srow.active .s-title,
+#searchdrop .srow.active .s-url { color: inherit; }
+#searchdrop .s-folder { color: var(--folder); }
+#searchdrop .s-title { color: var(--link); font-weight: 700; }
+#searchdrop .s-url { color: var(--dim); }
+#searchdrop .match { color: var(--border-bright); font-weight: 700; }
+#searchdrop .srow.active .match { color: inherit; text-decoration: underline; }
+#searchdrop .srow.dim { color: var(--dim); }
+
+/* папки тем же цветом, что линии интерфейса */
+:root, [data-theme="light"] { --folder: var(--border); }
+[data-theme="dark"] { --folder: var(--border); }
+
+/* --- v0.12: поисковая строка ведёт себя ТОЧНО как нижняя диалоговая --- */
+/* Строка поиска: текст и курсор в ячейке --lh, полоса центрируется паддингом. */
+#searchline { line-height: var(--lh); padding: 3px 6px; }
+/* Курсор: блок = одна ячейка, символ под ним виден инверсией,
+   мигание гасит только подложку (буква остаётся читаемой). */
+#searchline .cursor {
+  height: var(--lh);
+  line-height: var(--lh);
+  color: var(--active-fg);
+  animation: cursor-blink 1s steps(1) infinite;
+}
+
+/* --- папки тем же песочным, что надпись Link Commander --- */
+:root, [data-theme="light"] { --folder: var(--hdr); }
+[data-theme="dark"] { --folder: var(--hdr); }
+

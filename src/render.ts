@@ -1,6 +1,6 @@
 //! Символьный рендер интерфейса в стиле Midnight Commander.
 
-import type { Link, SortState, State } from "./types";
+import type { InputState, Link, SortState, State } from "./types";
 
 let charW = 8;
 let lineH = 14;
@@ -42,7 +42,8 @@ function formatDateTime(iso: string): string {
   }
 }
 
-function sortLinks(links: Link[], sort: SortState | null): Link[] {
+//! ЕДИНСТВЕННЫЙ источник порядка отображения ссылок.
+export function sortLinks(links: Link[], sort: SortState | null): Link[] {
   const copy = [...links];
   copy.sort((a, b) => {
     if (a.isFavorite !== b.isFavorite) return a.isFavorite ? -1 : 1;
@@ -161,11 +162,15 @@ function renderRight(state: State, cols: number): string {
   const items = state.data.folders
     .map((f, i) => {
       const active = !reorder && state.panel === "right" && i === state.rightCursor;
-      const reorderActive = reorder && i === state.reorder.cursor;
-      const num = f.isZero ? 0 : i;
-      const numStr = num < 10 ? ` (${num})` : "";
-      const label = f.isZero ? `[◆${f.name}]${numStr}` : `[${f.name}]${numStr}`;
-      const cls = reorderActive ? "reorder-active" : active ? "active" : "";
+      let cls = "";
+      if (reorder) {
+        if (i === state.reorder.cursor) cls = "reorder-active";
+        else if (f.isZero) cls = "locked";
+      } else if (active) {
+        cls = "active";
+      }
+      const num = i < 10 ? ` (${i})` : "";
+      const label = f.isZero ? `[◆${f.name}]${num}` : `[${f.name}]${num}`;
       return `<div class="fitem${cls ? " " + cls : ""}">${esc(label)}</div>`;
     })
     .join("");
@@ -174,24 +179,144 @@ function renderRight(state: State, cols: number): string {
   return `<div class="rline">${head}</div><div class="flist">${items}</div>${bottom}`;
 }
 
+//! Диапазон выделения [a,b) из состояния ввода.
+function selRange(inp: InputState): [number, number] {
+  const v = inp.stages[inp.idx].value;
+  const caret = Math.max(0, Math.min(inp.caret, v.length));
+  if (inp.selAnchor === null) return [caret, caret];
+  const anchor = Math.max(0, Math.min(inp.selAnchor, v.length));
+  return [Math.min(anchor, caret), Math.max(anchor, caret)];
+}
+
+//! Командная строка терминального вида: блок-курсор над символом,
+//! выделенный диапазон — инверсией. Всё из состояния, не из браузера.
 function renderCmd(state: State): string {
   if (state.input) {
-    const st = state.input.stages[state.input.idx];
+    const inp = state.input;
+    const st = inp.stages[inp.idx];
+    const v = st.value;
+    const [a, b] = selRange(inp);
+    const caret = Math.max(0, Math.min(inp.caret, v.length));
+
+    let body: string;
+    if (a !== b) {
+      body =
+        esc(v.slice(0, a)) +
+        `<span class="inv">${esc(v.slice(a, b))}</span>` +
+        esc(v.slice(b));
+    } else {
+      const ch = v[caret] ?? " ";
+      body =
+        esc(v.slice(0, caret)) +
+        `<span class="cursor">${esc(ch)}</span>` +
+        esc(v.slice(caret + 1));
+    }
     return (
       `<span class="c-prompt">(${esc(st.prompt)}): </span>` +
-      `<span class="c-value">${esc(st.value)}</span><span class="cursor"> </span>`
+      `<span class="c-value">${body}</span>`
     );
   }
   if (state.confirm) {
-    return `<span class="c-warn">${esc(state.confirm.message)} (y/N): </span><span class="c-value">${esc(state.confirm.pendingInput)}</span><span class="cursor"> </span>`;
+    return (
+      `<span class="c-warn">${esc(state.confirm.message)} (y/N): </span>` +
+      `<span class="c-value">${esc(state.confirm.pendingInput)}</span>` +
+      `<span class="cursor"> </span>`
+    );
   }
   const n = state.data.links.filter((l) => l.folderId === state.currentFolderId).length;
   const sortInfo = state.sort ? ` · sort: ${state.sort.column} ${state.sort.direction}` : "";
   const selInfo = state.selectedLinks.size > 0 ? ` · ${state.selectedLinks.size} selected` : "";
   return (
     `<span class="c-dim"> ${state.data.folders.length} folders · ${n} links here${sortInfo}${selInfo}` +
-    ` · theme: ${state.theme} · Esc: back to Main · lincom v0.7.0</span>`
+    ` · theme: ${state.theme} · opacity ${state.opacityPct}% · Esc: back to Main · lincom v0.13.0</span>`
   );
+}
+
+//! Подсветка первого совпадения запроса в тексте (как в поисковиках).
+function highlight(text: string, q: string): string {
+  if (!q) return esc(text);
+  const idx = text.toLowerCase().indexOf(q.toLowerCase());
+  if (idx < 0) return esc(text);
+  return (
+    esc(text.slice(0, idx)) +
+    `<span class="match">${esc(text.slice(idx, idx + q.length))}</span>` +
+    esc(text.slice(idx + q.length))
+  );
+}
+
+//! Поле поиска в тайтлбаре + выпадающий список результатов.
+function renderSearch(state: State): void {
+  const box = document.getElementById("searchbox")!;
+  const line = document.getElementById("searchline")!;
+  const drop = document.getElementById("searchdrop")!;
+  const s = state.search;
+
+  if (!s.active) {
+    box.style.display = "none";
+    drop.style.display = "none";
+    line.innerHTML = "";
+    drop.innerHTML = "";
+    return;
+  }
+  box.style.display = "flex";
+
+  const v = s.query;
+  const caret = Math.max(0, Math.min(s.caret, v.length));
+  let sa = caret;
+  let sb = caret;
+  if (s.selAnchor !== null) {
+    const an = Math.max(0, Math.min(s.selAnchor, v.length));
+    sa = Math.min(an, caret);
+    sb = Math.max(an, caret);
+  }
+  let body: string;
+  if (sa !== sb) {
+    body =
+      esc(v.slice(0, sa)) +
+      `<span class="inv">${esc(v.slice(sa, sb))}</span>` +
+      esc(v.slice(sb));
+  } else {
+    const ch = v[caret] ?? " ";
+    body =
+      esc(v.slice(0, caret)) +
+      `<span class="cursor">${esc(ch)}</span>` +
+      esc(v.slice(caret + 1));
+  }
+  line.innerHTML =
+    `<span class="c-prompt">Search: </span><span class="c-value">${body}</span>`;
+
+  const q = s.query.trim();
+  if (!q) {
+    drop.style.display = "none";
+    drop.innerHTML = "";
+    return;
+  }
+  drop.style.display = "block";
+
+  if (s.results.length === 0) {
+    drop.innerHTML = `<div class="srow dim">no matches</div>`;
+    return;
+  }
+
+  const maxRows = 10;
+  const rows = s.results.slice(0, maxRows);
+  drop.innerHTML = rows
+    .map((l, i) => {
+      const folder = state.data.folders.find((f) => f.id === l.folderId);
+      const fname = folder ? folder.name : "?";
+      const active = i === s.resultCursor;
+      const titleHtml = highlight(l.title, q);
+      const urlHtml = l.title.toLowerCase().includes(q.toLowerCase())
+        ? esc(l.url)
+        : highlight(l.url, q);
+      return (
+        `<div class="srow${active ? " active" : ""}">` +
+        `<span class="s-folder">[${esc(fname)}]</span> ` +
+        `<span class="s-title">${titleHtml}</span> ` +
+        `<span class="s-url">${urlHtml}</span></div>`
+      );
+    })
+    .join("");
 }
 
 export function render(state: State): void {
@@ -219,4 +344,6 @@ export function render(state: State): void {
   sepEl.innerHTML = `╥\n${"║\n".repeat(Math.max(0, rows - 2))}╨\n`;
   rightEl.innerHTML = renderRight(state, rightCols);
   cmdEl.innerHTML = renderCmd(state);
+  renderSearch(state);
 }
+

@@ -1,12 +1,12 @@
-//! lincom — состояние, клавиатура, диалоги ввода в стиле MC.
+//! lincom — состояние, клавиатура, диалоги ввода, поиск.
 
 import { getCurrentWindow } from "@tauri-apps/api/window";
 import { openUrl } from "@tauri-apps/plugin-opener";
 import { writeText } from "@tauri-apps/plugin-clipboard-manager";
 import { api } from "./api";
-import { measure, render } from "./render";
+import { measure, render, sortLinks } from "./render";
 import { applyTheme, currentTheme, toggleTheme } from "./theme";
-import type { InputStage, Link, State } from "./types";
+import type { InputStage, InputState, Link, SortColumn, State } from "./types";
 
 const state: State = {
   data: { folders: [], links: [] },
@@ -21,12 +21,14 @@ const state: State = {
   selectedLinks: new Set(),
   spaceHeld: false,
   reorder: { active: false, cursor: 0 },
+  search: { active: false, query: "", caret: 0, selAnchor: null, resultCursor: 0, results: [] },
 };
 
 const kbd = document.getElementById("kbd") as HTMLInputElement;
 
 function visibleLinks(): Link[] {
-  return state.data.links.filter((l) => l.folderId === state.currentFolderId);
+  const raw = state.data.links.filter((l) => l.folderId === state.currentFolderId);
+  return sortLinks(raw, state.sort);
 }
 
 function zeroId(): number {
@@ -39,7 +41,7 @@ function clampCursors(): void {
   state.leftCursor = L === 0 ? 0 : Math.min(state.leftCursor, L - 1);
   state.rightCursor = R === 0 ? 0 : Math.min(state.rightCursor, R - 1);
   if (state.reorder.active) {
-    state.reorder.cursor = R === 0 ? 0 : Math.min(state.reorder.cursor, R - 1);
+    state.reorder.cursor = Math.max(1, Math.min(state.reorder.cursor, R - 1));
   }
 }
 
@@ -60,6 +62,46 @@ function maybeClearSelection(exempt: boolean): void {
   }
 }
 
+function toggleSort(col: SortColumn): void {
+  if (!state.sort || state.sort.column !== col) state.sort = { column: col, direction: "asc" };
+  else if (state.sort.direction === "asc") state.sort = { column: col, direction: "desc" };
+  else state.sort = null;
+  redraw();
+}
+
+function selRange(inp: InputState): [number, number] {
+  const v = inp.stages[inp.idx].value;
+  const caret = Math.max(0, Math.min(inp.caret, v.length));
+  if (inp.selAnchor === null) return [caret, caret];
+  const anchor = Math.max(0, Math.min(inp.selAnchor, v.length));
+  return [Math.min(anchor, caret), Math.max(anchor, caret)];
+}
+
+function syncKbdSelection(): void {
+  const inp = state.input;
+  if (!inp) return;
+  const [a, b] = selRange(inp);
+  kbd.setSelectionRange(a, b);
+}
+
+function resyncCaretFromKbd(): void {
+  const inp = state.input;
+  if (!inp) return;
+  inp.stages[inp.idx].value = kbd.value;
+  inp.caret = kbd.selectionStart ?? kbd.value.length;
+  inp.selAnchor = null;
+  inp.histPos = null;
+}
+
+function setCaretEnd(): void {
+  const inp = state.input;
+  if (!inp) return;
+  inp.caret = inp.stages[inp.idx].value.length;
+  inp.selAnchor = null;
+  kbd.value = inp.stages[inp.idx].value;
+  kbd.setSelectionRange(inp.caret, inp.caret);
+}
+
 function histGet(key: string): string[] {
   try {
     return JSON.parse(localStorage.getItem(`lincom.hist.${key}`) ?? "[]") as string[];
@@ -77,11 +119,19 @@ function histPush(key: string, value: string): void {
 }
 
 function startInput(stages: InputStage[], onDone: (values: string[]) => Promise<void>): void {
-  state.input = { stages, idx: 0, draft: "", histPos: null, onDone };
+  state.input = {
+    stages,
+    idx: 0,
+    draft: "",
+    histPos: null,
+    caret: stages[0].value.length,
+    selAnchor: null,
+    onDone,
+  };
   state.confirm = null;
   kbd.value = stages[0].value;
   kbd.focus();
-  kbd.setSelectionRange(kbd.value.length, kbd.value.length);
+  kbd.setSelectionRange(stages[0].value.length, stages[0].value.length);
   redraw();
 }
 
@@ -89,11 +139,6 @@ function cancelInput(): void {
   state.input = null;
   kbd.blur();
   redraw();
-}
-
-function syncKbd(): void {
-  kbd.value = state.input!.stages[state.input!.idx].value;
-  kbd.setSelectionRange(kbd.value.length, kbd.value.length);
 }
 
 function histMove(dir: -1 | 1): void {
@@ -113,14 +158,14 @@ function histMove(dir: -1 | 1): void {
     if (next >= arr.length) {
       inp.histPos = null;
       stage.value = inp.draft;
-      syncKbd();
+      setCaretEnd();
       redraw();
       return;
     }
     inp.histPos = next;
   }
   stage.value = arr[inp.histPos];
-  syncKbd();
+  setCaretEnd();
   redraw();
 }
 
@@ -132,7 +177,7 @@ async function acceptStage(): Promise<void> {
   if (inp.idx + 1 < inp.stages.length) {
     inp.idx += 1;
     inp.histPos = null;
-    syncKbd();
+    setCaretEnd();
     redraw();
     return;
   }
@@ -236,18 +281,20 @@ function askDeleteFolder(id: number): void {
 async function toggleFav(id: number): Promise<void> {
   await api.toggleFavorite(id);
   await refresh();
+  const idx = visibleLinks().findIndex((l) => l.id === id);
+  if (idx >= 0) state.leftCursor = idx;
+  redraw();
 }
 
 function move(d: number): void {
   if (state.reorder.active) {
     const n = state.data.folders.length;
-    if (n === 0) return;
     const old = state.reorder.cursor;
     const next = old + d;
-    if (next < 0 || next >= n) return;
-    const ids = state.data.folders.map((f) => f.id);
-    [ids[old], ids[next]] = [ids[next], ids[old]];
-    state.data.folders = ids.map((id) => state.data.folders.find((f) => f.id === id)!);
+    if (next < 1 || next >= n) return;
+    const arr = [...state.data.folders];
+    [arr[old], arr[next]] = [arr[next], arr[old]];
+    state.data.folders = arr;
     state.reorder.cursor = next;
     redraw();
     return;
@@ -365,11 +412,137 @@ function toggleReorder(): void {
       redraw();
     });
   } else {
+    if (state.data.folders.length <= 1) return;
     state.reorder.active = true;
-    state.reorder.cursor = state.rightCursor;
+    state.reorder.cursor = Math.max(1, Math.min(state.rightCursor, state.data.folders.length - 1));
     state.panel = "right";
     redraw();
   }
+}
+
+function searchSelRange(): [number, number] {
+  const s = state.search;
+  const caret = Math.max(0, Math.min(s.caret, s.query.length));
+  if (s.selAnchor === null) return [caret, caret];
+  const an = Math.max(0, Math.min(s.selAnchor, s.query.length));
+  return [Math.min(an, caret), Math.max(an, caret)];
+}
+
+function syncSearchSelection(): void {
+  const [a, b] = searchSelRange();
+  kbd.setSelectionRange(a, b);
+}
+
+function computeSearchResults(): void {
+  const q = state.search.query.trim().toLowerCase();
+  if (!q) {
+    state.search.results = [];
+    return;
+  }
+  const scored: Array<{ l: Link; s: number }> = [];
+  for (const l of state.data.links) {
+    const t = l.title.toLowerCase();
+    const u = l.url.toLowerCase();
+    const d = l.description.toLowerCase();
+    let s = -1;
+    if (t.startsWith(q)) s = 0;
+    else if (t.includes(q)) s = 1;
+    else if (u.includes(q)) s = 2;
+    else if (d.includes(q)) s = 3;
+    if (s >= 0) scored.push({ l, s });
+  }
+  scored.sort(
+    (x, y) =>
+      x.s - y.s ||
+      (x.l.isFavorite === y.l.isFavorite ? 0 : x.l.isFavorite ? -1 : 1) ||
+      x.l.title.localeCompare(y.l.title),
+  );
+  state.search.results = scored.map((x) => x.l);
+}
+
+function openSearch(): void {
+  state.input = null;
+  state.confirm = null;
+  const s = state.search;
+  s.active = true;
+  s.query = "";
+  s.caret = 0;
+  s.selAnchor = null;
+  s.resultCursor = 0;
+  s.results = [];
+  kbd.value = "";
+  kbd.focus();
+  kbd.setSelectionRange(0, 0);
+  redraw();
+}
+
+function closeSearch(): void {
+  state.search.active = false;
+  kbd.blur();
+  redraw();
+}
+
+function handleSearchKey(e: KeyboardEvent): void {
+  const s = state.search;
+  const len = s.query.length;
+  const clampPos = (p: number): number => Math.max(0, Math.min(len, p));
+  const ctrl = e.ctrlKey && !e.altKey && !e.metaKey;
+
+  if (ctrl && e.code === "KeyS") { e.preventDefault(); closeSearch(); return; }
+  if (e.key === "Escape") { e.preventDefault(); closeSearch(); return; }
+  if (e.key === "Enter") { e.preventDefault(); searchJump(); return; }
+  if (e.key === "ArrowDown") { e.preventDefault(); if (s.results.length) s.resultCursor = Math.min(s.results.length - 1, s.resultCursor + 1); redraw(); return; }
+  if (e.key === "ArrowUp") { e.preventDefault(); s.resultCursor = Math.max(0, s.resultCursor - 1); redraw(); return; }
+
+  if (e.key === "ArrowLeft" || e.key === "ArrowRight" || e.key === "Home" || e.key === "End") {
+    e.preventDefault();
+    const [a, b] = searchSelRange();
+    const hasSel = a !== b;
+    if (e.shiftKey) {
+      if (s.selAnchor === null) s.selAnchor = s.caret;
+      let next = s.caret;
+      if (e.key === "ArrowLeft") next = s.caret - 1;
+      else if (e.key === "ArrowRight") next = s.caret + 1;
+      else if (e.key === "Home") next = 0;
+      else next = len;
+      s.caret = clampPos(next);
+    } else {
+      if (hasSel && (e.key === "ArrowLeft" || e.key === "ArrowRight")) {
+        s.caret = e.key === "ArrowLeft" ? a : b;
+      } else {
+        let next = s.caret;
+        if (e.key === "ArrowLeft") next = s.caret - 1;
+        else if (e.key === "ArrowRight") next = s.caret + 1;
+        else if (e.key === "Home") next = 0;
+        else next = len;
+        s.caret = clampPos(next);
+      }
+      s.selAnchor = null;
+    }
+    syncSearchSelection();
+    redraw();
+    return;
+  }
+
+  if (ctrl && e.code === "KeyA") { e.preventDefault(); s.selAnchor = 0; s.caret = len; syncSearchSelection(); redraw(); return; }
+  if (ctrl && e.code === "KeyC") { e.preventDefault(); const [a, b] = searchSelRange(); if (a !== b) void writeText(s.query.slice(a, b)); return; }
+
+  syncSearchSelection();
+}
+
+function searchJump(): void {
+  const l = state.search.results[state.search.resultCursor];
+  if (!l) {
+    closeSearch();
+    return;
+  }
+  const folderId = l.folderId;
+  const linkId = l.id;
+  closeSearch();
+  state.currentFolderId = folderId;
+  state.panel = "left";
+  state.leftCursor = Math.max(0, visibleLinks().findIndex((x) => x.id === linkId));
+  redraw();
 }
 
 const MODIFIER_CODES = new Set([
@@ -379,16 +552,21 @@ const MODIFIER_CODES = new Set([
   "MetaLeft", "MetaRight",
 ]);
 
-document.addEventListener("keydown", (e) => {
-  // 1. Режим ввода — обработчик ниже на #kbd, здесь выходим.
-  if (state.input) return;
+document.getElementById("left")!.addEventListener("click", (e) => {
+  const target = e.target as HTMLElement;
+  if (target.classList.contains("sort-title")) toggleSort("title");
+  else if (target.classList.contains("sort-mtime")) toggleSort("updatedAt");
+});
 
-  // 2. ИГНОРИРУЕМ нажатия самих модификаторов.
-  //    Иначе keydown Control приходил раньше чем Ctrl+C,
-  //    считался "действием без пробела" и стирал выделение.
+document.addEventListener("keydown", (e) => {
+  if (state.input) return;
   if (MODIFIER_CODES.has(e.code)) return;
 
-  // 3. Режим подтверждения.
+  if (state.search.active) {
+    if (e.ctrlKey && !e.shiftKey && e.code === "KeyS") { e.preventDefault(); closeSearch(); }
+    return;
+  }
+
   if (state.confirm) {
     e.preventDefault();
     if (e.key === "Enter") {
@@ -413,11 +591,10 @@ document.addEventListener("keydown", (e) => {
     return;
   }
 
-  // 4. Режим перестановки папок.
   if (state.reorder.active) {
     e.preventDefault();
     if (e.code === "ArrowLeft") {
-      state.reorder.cursor = Math.max(0, state.reorder.cursor - 1);
+      state.reorder.cursor = Math.max(1, state.reorder.cursor - 1);
       redraw();
     } else if (e.code === "ArrowRight") {
       state.reorder.cursor = Math.min(state.data.folders.length - 1, state.reorder.cursor + 1);
@@ -439,7 +616,6 @@ document.addEventListener("keydown", (e) => {
   const ctrlShift = ctrl && e.shiftKey;
   const ctrlOnly = ctrl && !e.shiftKey;
 
-  // 5. Пробел — старт/расширение выделения.
   if (e.code === "Space") {
     e.preventDefault();
     state.spaceHeld = true;
@@ -449,8 +625,6 @@ document.addEventListener("keydown", (e) => {
     return;
   }
 
-  // 6. Любое действие без пробела сбрасывает выделение,
-  //    КРОМЕ Ctrl+C (ему выделение нужно чтобы копировать несколько).
   maybeClearSelection(ctrlOnly && e.code === "KeyC");
 
   if (ctrlShift && e.code === "KeyN") { e.preventDefault(); dialogCreateFolder(); return; }
@@ -460,6 +634,7 @@ document.addEventListener("keydown", (e) => {
   if (ctrlOnly && e.code === "KeyR") { e.preventDefault(); editCurrent(); return; }
   if (ctrlOnly && e.code === "KeyF") { e.preventDefault(); favCurrent(); return; }
   if (ctrlOnly && e.code === "KeyC") { e.preventDefault(); void copyLinks(); return; }
+  if (ctrlOnly && e.code === "KeyS") { e.preventDefault(); openSearch(); return; }
 
   if (e.key >= "0" && e.key <= "9" && !ctrl && !e.altKey && !e.metaKey) {
     e.preventDefault();
@@ -494,20 +669,84 @@ document.addEventListener("keyup", (e) => {
 });
 
 kbd.addEventListener("keydown", (e) => {
-  if (!state.input) return;
-  if (e.key === "Enter") { e.preventDefault(); void acceptStage(); }
-  else if (e.key === "Escape") { e.preventDefault(); cancelInput(); }
-  else if (e.key === "ArrowUp") { e.preventDefault(); histMove(-1); }
-  else if (e.key === "ArrowDown") { e.preventDefault(); histMove(1); }
-  else if (e.ctrlKey && e.code === "KeyA") { e.preventDefault(); kbd.select(); }
-  else if (e.ctrlKey && e.code === "KeyC") { e.preventDefault(); document.execCommand("copy"); }
+  if (state.search.active) {
+    handleSearchKey(e);
+    return;
+  }
+
+  const inp = state.input;
+  if (!inp) return;
+  const len = inp.stages[inp.idx].value.length;
+  const clampPos = (p: number): number => Math.max(0, Math.min(len, p));
+
+  if (e.key === "Enter") { e.preventDefault(); void acceptStage(); return; }
+  if (e.key === "Escape") { e.preventDefault(); cancelInput(); return; }
+  if (e.key === "ArrowUp") { e.preventDefault(); histMove(-1); return; }
+  if (e.key === "ArrowDown") { e.preventDefault(); histMove(1); return; }
+
+  if (e.key === "ArrowLeft" || e.key === "ArrowRight" || e.key === "Home" || e.key === "End") {
+    e.preventDefault();
+    const [a, b] = selRange(inp);
+    const hasSel = a !== b;
+    if (e.shiftKey) {
+      if (inp.selAnchor === null) inp.selAnchor = inp.caret;
+      let next = inp.caret;
+      if (e.key === "ArrowLeft") next = inp.caret - 1;
+      else if (e.key === "ArrowRight") next = inp.caret + 1;
+      else if (e.key === "Home") next = 0;
+      else next = len;
+      inp.caret = clampPos(next);
+    } else {
+      if (hasSel && (e.key === "ArrowLeft" || e.key === "ArrowRight")) {
+        inp.caret = e.key === "ArrowLeft" ? a : b;
+      } else {
+        let next = inp.caret;
+        if (e.key === "ArrowLeft") next = inp.caret - 1;
+        else if (e.key === "ArrowRight") next = inp.caret + 1;
+        else if (e.key === "Home") next = 0;
+        else next = len;
+        inp.caret = clampPos(next);
+      }
+      inp.selAnchor = null;
+    }
+    syncKbdSelection();
+    redraw();
+    return;
+  }
+
+  if (e.ctrlKey && e.code === "KeyA") {
+    e.preventDefault();
+    inp.selAnchor = 0;
+    inp.caret = len;
+    syncKbdSelection();
+    redraw();
+    return;
+  }
+
+  if (e.ctrlKey && e.code === "KeyC") {
+    e.preventDefault();
+    const [a, b] = selRange(inp);
+    if (a !== b) void writeText(inp.stages[inp.idx].value.slice(a, b));
+    return;
+  }
+
+  syncKbdSelection();
 });
 
 kbd.addEventListener("input", () => {
+  if (state.search.active) {
+    const s = state.search;
+    s.query = kbd.value;
+    s.caret = kbd.selectionStart ?? kbd.value.length;
+    s.selAnchor = null;
+    computeSearchResults();
+    s.resultCursor = 0;
+    redraw();
+    return;
+  }
   const inp = state.input;
   if (!inp) return;
-  inp.stages[inp.idx].value = kbd.value;
-  inp.histPos = null;
+  resyncCaretFromKbd();
   redraw();
 });
 

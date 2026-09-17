@@ -43,6 +43,8 @@ export interface InputState {
   idx: number;
   draft: string;
   histPos: number | null;
+  caret: number;
+  selAnchor: number | null;
   onDone: (values: string[]) => Promise<void>;
 }
 
@@ -55,6 +57,16 @@ export interface ConfirmState {
 export interface ReorderState {
   active: boolean;
   cursor: number;
+}
+
+//! Поиск в стиле Windows Explorer / Chrome omnibox.
+export interface SearchState {
+  active: boolean;
+  query: string;
+  caret: number;
+  selAnchor: number | null;
+  resultCursor: number;
+  results: Link[];
 }
 
 export interface State {
@@ -70,4 +82,5 @@ export interface State {
   selectedLinks: Set<number>;
   spaceHeld: boolean;
   reorder: ReorderState;
+  search: SearchState;
 }
