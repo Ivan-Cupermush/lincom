@@ -1,7 +1,7 @@
 /* lincom — палитры Solarized Light (default) и Solarized Dark. */
 :root, [data-theme="light"] {
   --font-size: 14px;
-  --bg: rgba(253, 246, 227, 0.90);
+  --bg: #fdf6e3;
   --text: #586e75;
   --dim: #93a1a1;
   --border: #2aa198;
@@ -17,14 +17,14 @@
   --kbd-fg: #fdf6e3;
   --prompt: #cb4b16;
   --warn: #dc322f;
-  --titlebar-bg: rgba(238, 232, 213, 0.95);
+  --titlebar-bg: #eee8d5;
   --titlebar-fg: #b58900;
   --sep: #2aa198;
 }
 
 [data-theme="dark"] {
   --font-size: 14px;
-  --bg: rgba(0, 43, 54, 0.90);
+  --bg: #002b36;
   --text: #839496;
   --dim: #586e75;
   --border: #2aa198;
@@ -40,7 +40,7 @@
   --kbd-fg: #fdf6e3;
   --prompt: #cb4b16;
   --warn: #dc322f;
-  --titlebar-bg: rgba(7, 54, 66, 0.95);
+  --titlebar-bg: #073642;
   --titlebar-fg: #b58900;
   --sep: #2aa198;
 }
@@ -87,13 +87,6 @@ html, body {
 .fitem.active { background: var(--active-bg); color: var(--active-fg); }
 
 #cmdline { line-height: 24px; height: 24px; white-space: pre; overflow: hidden; padding: 0 8px; }
-#hotkeys {
-  line-height: 22px; height: 22px; white-space: pre; overflow: hidden; padding: 0 8px;
-  background: var(--kbd-bg); color: var(--kbd-fg);
-}
-#hotkeys .k { background: var(--kbd-fg); color: var(--kbd-bg); font-weight: 700; padding: 0 4px; margin-left: 8px; }
-#hotkeys .k:first-child { margin-left: 0; }
-
 .c-border { color: var(--border); }
 .c-col { color: var(--dim); }            /* приглушённые разделители колонок */
 .c-hdr { color: var(--hdr); font-weight: 700; }
@@ -249,3 +242,54 @@ html, body {
 :root, [data-theme="light"] { --folder: var(--hdr); }
 [data-theme="dark"] { --folder: var(--hdr); }
 
+
+/* --- v0.13: хоткеи в два слоя; панели без отступа для чистого снапа --- */
+#panels { padding-top: 0; }
+/* --- Исправление: хоткеи должны быть видны --- */
+
+/* --- Хоткеи: два слоя --- */
+#hotkeys {
+  height: 44px;
+  background: var(--kbd-bg);
+  color: var(--kbd-fg);
+  padding: 0 8px;
+  display: flex;
+  flex-direction: column;
+  justify-content: center;
+}
+#hotkeys .hk-row {
+  line-height: 22px;
+  height: 22px;
+  white-space: pre;
+  overflow: hidden;
+}
+#hotkeys .k {
+  display: inline-block;
+  background: var(--kbd-fg);
+  color: var(--kbd-bg);
+  font-weight: 700;
+  padding: 0 4px;
+  margin-left: 8px;
+}
+#hotkeys .k:first-child { margin-left: 0; }
+
+/* --- v0.14: хоткеи распределены по всей ширине (адаптивно) --- */
+#hotkeys {
+  height: 44px;
+  background: var(--kbd-bg);
+  color: var(--kbd-fg);
+  padding: 0 10px;
+  display: flex;
+  flex-direction: column;
+  justify-content: center;
+}
+#hotkeys .hk-row {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  height: 22px;
+  line-height: 22px;
+  overflow: hidden;
+}
+#hotkeys .hk-item { white-space: pre; }
+#hotkeys .hk-item .k { margin: 0 4px 0 0; }

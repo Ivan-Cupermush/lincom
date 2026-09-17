@@ -228,7 +228,7 @@ function renderCmd(state: State): string {
   const selInfo = state.selectedLinks.size > 0 ? ` · ${state.selectedLinks.size} selected` : "";
   return (
     `<span class="c-dim"> ${state.data.folders.length} folders · ${n} links here${sortInfo}${selInfo}` +
-    ` · theme: ${state.theme} · opacity ${state.opacityPct}% · Esc: back to Main · lincom v0.13.0</span>`
+    ` · theme: ${state.theme} · opacity ${state.opacityPct}% · Esc: back to Main</span>`
   );
 }
 
@@ -347,3 +347,8 @@ export function render(state: State): void {
   renderSearch(state);
 }
 
+
+//! Метрики глифов для снапа размера окна.
+export function metrics(): { charW: number; lineH: number } {
+  return { charW, lineH };
+}

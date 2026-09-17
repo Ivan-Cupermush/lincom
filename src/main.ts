@@ -1,10 +1,11 @@
 //! lincom — состояние, клавиатура, диалоги ввода, поиск.
 
 import { getCurrentWindow } from "@tauri-apps/api/window";
+import { LogicalSize } from "@tauri-apps/api/dpi";
 import { openUrl } from "@tauri-apps/plugin-opener";
 import { writeText } from "@tauri-apps/plugin-clipboard-manager";
 import { api } from "./api";
-import { measure, render, sortLinks } from "./render";
+import { measure, render, sortLinks, metrics } from "./render";
 import { applyTheme, currentTheme, toggleTheme } from "./theme";
 import type { InputStage, InputState, Link, SortColumn, State } from "./types";
 
@@ -22,6 +23,7 @@ const state: State = {
   spaceHeld: false,
   reorder: { active: false, cursor: 0 },
   search: { active: false, query: "", caret: 0, selAnchor: null, resultCursor: 0, results: [] },
+  opacityPct: 100,
 };
 
 const kbd = document.getElementById("kbd") as HTMLInputElement;
@@ -545,6 +547,83 @@ function searchJump(): void {
   redraw();
 }
 
+/* ---------------- прозрачность: 10 ступеней 30..100 ---------------- */
+
+const OPACITY_LEVELS = [30, 38, 46, 53, 61, 69, 77, 84, 92, 100];
+let opacityIdx = (() => {
+  const v = parseInt(localStorage.getItem("lincom.opacity") ?? "", 10);
+  const i = OPACITY_LEVELS.indexOf(v);
+  return i >= 0 ? i : OPACITY_LEVELS.length - 1;
+})();
+
+function applyOpacity(): void {
+  state.opacityPct = OPACITY_LEVELS[opacityIdx];
+  // Нативный setOpacity в Tauri на Linux не реализован (команда вырезана
+  // платформенно), поэтому используем CSS-opacity на body: окно уже
+  // прозрачное (transparent: true), значит альфа контента даёт настоящую
+  // сквозную прозрачность на любой платформе, включая Wayland.
+  document.body.style.opacity = (state.opacityPct / 100).toFixed(2);
+}
+
+function opacityStep(d: number): void {
+  opacityIdx = Math.max(0, Math.min(OPACITY_LEVELS.length - 1, opacityIdx + d));
+  localStorage.setItem("lincom.opacity", String(OPACITY_LEVELS[opacityIdx]));
+  applyOpacity();
+  redraw();
+}
+
+/* ---------------- снап размера окна к целым строкам/колонкам ---------------- */
+
+const CHROME_H = 30 + 24 + 44; // titlebar + cmdline + hotkeys (2 слоя)
+let snapTimer: number | undefined;
+let snapping = false;
+
+function scheduleSnap(): void {
+  if (snapTimer !== undefined) window.clearTimeout(snapTimer);
+  snapTimer = window.setTimeout(() => {
+    void snapWindow();
+  }, 150);
+}
+
+async function snapWindow(): Promise<void> {
+  if (snapping) return;
+  snapping = true;
+  try {
+    const win = getCurrentWindow();
+    const phys = await win.innerSize();
+    const scale = await win.scaleFactor();
+    const m = metrics();
+    const lw = phys.width / scale;
+    const lh = phys.height / scale;
+    const panelsH = lh - CHROME_H;
+    if (!(lw > 0) || !(panelsH > 0)) return;
+    const cols = Math.max(40, Math.round(lw / m.charW));
+    const rows = Math.max(6, Math.round(panelsH / m.lineH));
+    const targetW = Math.ceil(cols * m.charW);
+    const targetH = CHROME_H + rows * m.lineH;
+    if (Math.abs(targetW - lw) > 0.5 || Math.abs(targetH - lh) > 0.5) {
+      await win.setSize(new LogicalSize(targetW, targetH));
+    }
+    localStorage.setItem("lincom.win", JSON.stringify({ w: targetW, h: targetH }));
+  } catch {
+    /* никогда не роняем приложение из-за снапа */
+  } finally {
+    snapping = false;
+  }
+}
+
+function savedWinSize(): { w: number; h: number } | null {
+  try {
+    const raw = localStorage.getItem("lincom.win");
+    if (!raw) return null;
+    const o = JSON.parse(raw) as { w?: unknown; h?: unknown };
+    if (typeof o.w === "number" && typeof o.h === "number") return { w: o.w, h: o.h };
+  } catch {
+    /* ignore */
+  }
+  return null;
+}
+
 const MODIFIER_CODES = new Set([
   "ControlLeft", "ControlRight",
   "ShiftLeft", "ShiftRight",
@@ -556,6 +635,11 @@ document.getElementById("left")!.addEventListener("click", (e) => {
   const target = e.target as HTMLElement;
   if (target.classList.contains("sort-title")) toggleSort("title");
   else if (target.classList.contains("sort-mtime")) toggleSort("updatedAt");
+});
+
+//! Кнопки окна: останавливаем mousedown, чтобы drag-зона тайтлбара не поглотила клик.
+document.getElementById("win-controls")?.addEventListener("mousedown", (e) => {
+  e.stopPropagation();
 });
 
 document.addEventListener("keydown", (e) => {
@@ -626,6 +710,8 @@ document.addEventListener("keydown", (e) => {
   }
 
   maybeClearSelection(ctrlOnly && e.code === "KeyC");
+  if (ctrl && (e.code === "Equal" || e.code === "NumpadAdd")) { e.preventDefault(); opacityStep(1); return; }
+  if (ctrl && (e.code === "Minus" || e.code === "NumpadSubtract")) { e.preventDefault(); opacityStep(-1); return; }
 
   if (ctrlShift && e.code === "KeyN") { e.preventDefault(); dialogCreateFolder(); return; }
   if (ctrlShift && e.code === "KeyT") { e.preventDefault(); state.theme = toggleTheme(); redraw(); return; }
@@ -669,6 +755,9 @@ document.addEventListener("keyup", (e) => {
 });
 
 kbd.addEventListener("keydown", (e) => {
+  // Не пускаем событие в основной обработчик: иначе Enter после закрытия
+  // поиска/диалога успевал открыть ссылку, а цифры в поиске прыгали по папкам.
+  if (state.search.active || state.input) e.stopPropagation();
   if (state.search.active) {
     handleSearchKey(e);
     return;
@@ -757,13 +846,35 @@ document.getElementById("btn-close")?.addEventListener("click", () => {
   void getCurrentWindow().close();
 });
 
+async function restoreWindowState(): Promise<void> {
+  try {
+    applyOpacity();
+    const saved = savedWinSize();
+    if (saved) {
+      await getCurrentWindow().setSize(new LogicalSize(saved.w, saved.h));
+    }
+    redraw();
+    scheduleSnap();
+  } catch {
+    /* ignore */
+  }
+}
+
 async function init(): Promise<void> {
   applyTheme(state.theme);
   measure();
   await refresh();
   state.currentFolderId = zeroId();
   redraw();
+  // Восстанавливаем размер/прозрачность ТОЛЬКО после первой отрисовки,
+  // чтобы окно никогда не показывало пустой экран.
+  window.setTimeout(() => {
+    void restoreWindowState();
+  }, 0);
 }
 
-window.addEventListener("resize", () => redraw());
+window.addEventListener("resize", () => {
+  redraw();
+  scheduleSnap();
+});
 void init();

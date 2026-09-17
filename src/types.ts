@@ -83,4 +83,5 @@ export interface State {
   spaceHeld: boolean;
   reorder: ReorderState;
   search: SearchState;
+  opacityPct: number;
 }
